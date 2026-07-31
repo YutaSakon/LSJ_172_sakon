@@ -512,3 +512,116 @@ if not final_df.empty:
         print(verb_count_df.to_string(index=False))
 else:
         print("\n抽出結果が空のため、動詞ごとの件数はありません。")
+
+#文頭の数字を消す場合
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+
+DEFAULT_INPUT_PATH = "/content/LSJ.csv"
+DEFAULT_OUTPUT_PATH: str | None = None
+DEFAULT_TEXT_COLUMNS = ["sentence", "main_clause_text", "context_prefix_text"]
+
+
+def _remove_digit_containing_spans(text: Any) -> Any:
+    if pd.isna(text):
+        return text
+
+    normalized = str(text)
+    cleaned = re.sub(r"\S*\d\S*", "", normalized)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def build_output_path(input_path: str, output_path: str | None) -> str:
+    if output_path is not None:
+        return output_path
+
+    input_file = Path(input_path)
+    return str(input_file.with_name(f"{input_file.stem}_without_numbers{input_file.suffix}"))
+
+
+def clean_csv_text_columns(
+    input_path: str,
+    output_path: str | None = None,
+    text_columns: list[str] | tuple[str, ...] = DEFAULT_TEXT_COLUMNS,
+) -> pd.DataFrame:
+    df = pd.read_csv(input_path)
+    existing_columns = [column for column in text_columns if column in df.columns]
+    if not existing_columns:
+        missing = ", ".join(text_columns)
+        raise ValueError(f"None of the requested text columns were found: {missing}")
+
+    result = df.copy()
+    for column in existing_columns:
+        result[column] = result[column].map(_remove_digit_containing_spans)
+
+    resolved_output_path = build_output_path(input_path, output_path)
+    result.to_csv(resolved_output_path, index=False, encoding="utf-8-sig")
+    print(f"Saved cleaned CSV to: {resolved_output_path}")
+    return result
+
+
+def clean_jsonl_text_fields(
+    input_path: str,
+    output_path: str | None = None,
+    text_fields: list[str] | tuple[str, ...] = DEFAULT_TEXT_COLUMNS,
+    encoding: str = "utf-8",
+) -> Path:
+    input_file = Path(input_path)
+    resolved_output_path = Path(build_output_path(input_path, output_path))
+    resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with input_file.open("r", encoding=encoding) as in_f, resolved_output_path.open(
+        "w",
+        encoding=encoding,
+    ) as out_f:
+        for line in in_f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            for field in text_fields:
+                if field in record:
+                    record[field] = _remove_digit_containing_spans(record[field])
+            out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    print(f"Saved cleaned JSONL to: {resolved_output_path}")
+    return resolved_output_path
+
+
+def clean_sentence_numbers(
+    input_path: str = DEFAULT_INPUT_PATH,
+    output_path: str | None = DEFAULT_OUTPUT_PATH,
+    text_columns: list[str] | tuple[str, ...] = DEFAULT_TEXT_COLUMNS,
+) -> object:
+    suffix = Path(input_path).suffix.lower()
+    if suffix == ".csv":
+        return clean_csv_text_columns(
+            input_path=input_path,
+            output_path=output_path,
+            text_columns=text_columns,
+        )
+    if suffix == ".jsonl":
+        return clean_jsonl_text_fields(
+            input_path=input_path,
+            output_path=output_path,
+            text_fields=text_columns,
+        )
+
+    raise ValueError("Only .csv and .jsonl files are supported.")
+
+
+def main() -> None:
+    clean_sentence_numbers()
+
+
+if __name__ == "__main__":
+    main()
